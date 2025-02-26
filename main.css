@@ -1,3 +1,28 @@
+/* 
+Название: main.css
+*/
+
+/* Сброс стилей */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* Основные стили */
 body {
-    background-image: radial-gradient(#fff, #000);
+    font-family: Arial, sans-serif;
+    background-color: #f4f4f4;
+    color: #333;
+    line-height: 1.6;
+}
+
+h1 {
+    color: #444;
+    margin-bottom: 20px;
+}
+
+.container {
+    width: 80%;
+    margin: 0 auto;
 }

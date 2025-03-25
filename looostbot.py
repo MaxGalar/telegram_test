@@ -17,159 +17,157 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Подключение к PostgreSQL через DATABASE_URL ---
+# --- Подключение к PostgreSQL ---
 def get_db_connection():
-    db_url = os.environ['DATABASE_URL']
-    parsed = urlparse(db_url)
-    
-    return psycopg2.connect(
-        dbname=parsed.path[1:],  # Убираем первый символ '/'
-        user=parsed.username,
-        password=parsed.password,
-        host=parsed.hostname,
-        port=parsed.port,
-        sslmode='require'
-    )
+    try:
+        db_url = os.environ['DATABASE_URL']
+        logger.info(f"Подключаемся к БД с URL: {db_url[:15]}...")  # Логируем часть URL для безопасности
+        
+        parsed = urlparse(db_url)
+        conn = psycopg2.connect(
+            dbname=parsed.path[1:],
+            user=parsed.username,
+            password=parsed.password,
+            host=parsed.hostname,
+            port=parsed.port,
+            sslmode='require'
+        )
+        logger.info("Успешное подключение к БД")
+        return conn
+    except Exception as e:
+        logger.error(f"Ошибка подключения к БД: {str(e)}")
+        raise
 
 # --- Инициализация БД ---
 def init_db():
-    conn = None
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_actions (
-                user_id SERIAL PRIMARY KEY,
-                first_activity TIMESTAMP DEFAULT NOW(),
-                last_activity TIMESTAMP DEFAULT NOW(),
-                actions_count INTEGER DEFAULT 1
-            )
-        """)
-        conn.commit()
-        logger.info("База данных инициализирована")
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS user_actions (
+                        user_id BIGINT PRIMARY KEY,
+                        username TEXT,
+                        first_activity TIMESTAMP DEFAULT NOW(),
+                        last_activity TIMESTAMP DEFAULT NOW(),
+                        actions_count INTEGER DEFAULT 1
+                    )
+                """)
+                conn.commit()
+                logger.info("Таблица user_actions создана/проверена")
+                
+                # Проверка существования данных
+                cursor.execute("SELECT COUNT(*) FROM user_actions")
+                count = cursor.fetchone()[0]
+                logger.info(f"В таблице {count} записей")
     except Exception as e:
-        logger.error(f"Ошибка инициализации БД: {e}")
+        logger.error(f"Ошибка инициализации БД: {str(e)}")
         raise
-    finally:
-        if conn:
-            conn.close()
-
-# --- Клавиатура ---
-def get_keyboard() -> ReplyKeyboardMarkup:
-    buttons = [
-        [KeyboardButton("🕒 Текущее время")],
-        [KeyboardButton("📊 Моя статистика")],
-        [KeyboardButton("🚪 Остановить бота")],
-    ]
-    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 # --- Логирование действий ---
-async def log_action(user_id: int):
-    conn = None
+async def log_action(user_id: int, username: str = None):
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO user_actions (user_id)
-            VALUES (%s)
-            ON CONFLICT (user_id) DO UPDATE SET
-                last_activity = NOW(),
-                actions_count = user_actions.actions_count + 1
-        """, (user_id,))
-        conn.commit()
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO user_actions (user_id, username)
+                    VALUES (%s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        last_activity = NOW(),
+                        actions_count = user_actions.actions_count + 1,
+                        username = COALESCE(%s, user_actions.username)
+                    RETURNING actions_count
+                """, (user_id, username, username))
+                conn.commit()
+                result = cursor.fetchone()
+                logger.info(f"Запись в БД: user_id={user_id}, actions_count={result[0] if result else 'N/A'}")
     except Exception as e:
-        logger.error(f"Ошибка записи в БД: {e}")
-    finally:
-        if conn:
-            conn.close()
+        logger.error(f"Ошибка записи в БД: {str(e)}")
+
+# --- Получение статистики ---
+async def get_stats(user_id: int):
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT first_activity, last_activity, actions_count
+                    FROM user_actions
+                    WHERE user_id = %s
+                """, (user_id,))
+                return cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка получения статистики: {str(e)}")
+        return None
+
+# --- Клавиатура ---
+def get_keyboard():
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🕒 Текущее время")],
+        [KeyboardButton("📊 Моя статистика")],
+        [KeyboardButton("🚪 Остановить бота")]
+    ], resize_keyboard=True)
 
 # --- Обработчики команд ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    logger.info(f"Пользователь {user.id} запустил бота")
-    await log_action(user.id)
+    logger.info(f"Старт от {user.id}")
+    await log_action(user.id, user.username)
     await update.message.reply_text(
         f"Привет, {user.first_name}! Выбери действие:",
-        reply_markup=get_keyboard(),
+        reply_markup=get_keyboard()
     )
 
-async def show_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def show_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    logger.info(f"Пользователь {user.id} запросил время")
     await log_action(user.id)
-    current_time = datetime.datetime.now().strftime("%H:%M:%S %d.%m.%Y")
-    await update.message.reply_text(f"⏰ Текущее время: {current_time}")
+    time_str = datetime.datetime.now().strftime("%H:%M:%S %d.%m.%Y")
+    await update.message.reply_text(f"⏰ Текущее время: {time_str}")
 
-async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    await log_action(user.id)
+    stats = await get_stats(user.id)
     
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT first_activity, last_activity, actions_count
-            FROM user_actions
-            WHERE user_id = %s
-        """, (user.id,))
-        
-        result = cursor.fetchone()
-        if result:
-            first_activity, last_activity, count = result
-            first_str = first_activity.strftime("%d.%m.%Y %H:%M")
-            last_str = last_activity.strftime("%d.%m.%Y %H:%M")
-            message = (
-                f"📊 Ваша статистика:\n"
-                f"• Первый визит: {first_str}\n"
-                f"• Последний визит: {last_str}\n"
-                f"• Всего действий: {count}"
-            )
-        else:
-            message = "📊 Статистика не найдена"
-        
-        await update.message.reply_text(message)
-    except Exception as e:
-        logger.error(f"Ошибка получения статистики: {e}")
-        await update.message.reply_text("⚠️ Не удалось получить статистику")
-    finally:
-        if conn:
-            conn.close()
+    if stats:
+        first, last, count = stats
+        message = (
+            f"📊 Ваша статистика:\n"
+            f"• Первый визит: {first.strftime('%d.%m.%Y %H:%M')}\n"
+            f"• Последний визит: {last.strftime('%d.%m.%Y %H:%M')}\n"
+            f"• Всего действий: {count}"
+        )
+    else:
+        message = "📊 Статистика не найдена"
+    
+    await update.message.reply_text(message)
 
-async def stop_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    logger.info(f"Пользователь {user.id} остановил бота")
-    await log_action(user.id)
-    await update.message.reply_text("Бот завершает работу...", reply_markup=None)
+async def stop_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Бот завершает работу...")
     await context.application.stop()
 
 # --- Запуск бота ---
-def main() -> None:
-    # Проверяем наличие необходимых переменных
-    required_vars = ['DATABASE_URL', 'TOKEN']
-    missing_vars = [var for var in required_vars if var not in os.environ]
+def main():
+    # Проверка переменных окружения
+    for var in ['DATABASE_URL', 'TOKEN']:
+        if var not in os.environ:
+            logger.error(f"Отсутствует переменная окружения: {var}")
+            return
     
-    if missing_vars:
-        logger.error(f"Отсутствуют переменные окружения: {', '.join(missing_vars)}")
-        return
+    init_db()  # Инициализация БД с логированием
     
-    # Инициализация БД
-    init_db()
+    app = Application.builder().token(os.environ['TOKEN']).build()
     
-    # Создание приложения
-    application = Application.builder().token(os.environ['TOKEN']).build()
-
     # Регистрация обработчиков
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Regex("^🕒 Текущее время$"), show_time))
-    application.add_handler(MessageHandler(filters.Regex("^📊 Моя статистика$"), show_stats))
-    application.add_handler(MessageHandler(filters.Regex("^🚪 Остановить бота$"), stop_bot))
+    handlers = [
+        CommandHandler('start', start),
+        MessageHandler(filters.Regex('^🕒 Текущее время$'), show_time),
+        MessageHandler(filters.Regex('^📊 Моя статистика$'), show_stats),
+        MessageHandler(filters.Regex('^🚪 Остановить бота$'), stop_bot)
+    ]
+    
+    for handler in handlers:
+        app.add_handler(handler)
+    
+    logger.info("Бот запущен и готов к работе")
+    app.run_polling()
 
-    logger.info("Бот запускается...")
-    application.run_polling()
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

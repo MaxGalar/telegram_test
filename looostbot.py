@@ -15,7 +15,7 @@ from telegram.ext import (
 
 TOKEN = os.environ['TOKEN']
 
-# --- Клавиатура с кнопками ---
+# --- Клавиатура с кнопками и сделаем тест ---
 def get_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton("🕒 Текущее время")],

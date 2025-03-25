@@ -48,7 +48,6 @@ def init_db():
         if conn:
             conn.close()
 
-# --- Логирование действий ---
 async def log_action(user_id: int, action: str):
     conn = None
     try:
@@ -57,6 +56,7 @@ async def log_action(user_id: int, action: str):
         cursor.execute(
             'INSERT INTO user_actions (user_id, action) VALUES (%s, %s)',
             (user_id, action)
+        )  # <-- Вот эта скобка была пропущена
         conn.commit()
     except Exception as e:
         logger.error(f"Ошибка записи в БД: {e}")

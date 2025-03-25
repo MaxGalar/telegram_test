@@ -10,13 +10,13 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     handlers=[
-        logging.FileHandler('bot.log'),  # Логи в файл
-        logging.StreamHandler()          # Логи в консоль
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# --- Подключение к PostgreSQL (Railway) ---
+# --- Подключение к PostgreSQL ---
 def get_db_connection():
     return psycopg2.connect(
         dbname=os.environ['PGDATABASE'],
@@ -28,6 +28,7 @@ def get_db_connection():
 
 # --- Инициализация БД ---
 def init_db():
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -47,8 +48,9 @@ def init_db():
         if conn:
             conn.close()
 
-# --- Логирование действий в БД ---
+# --- Логирование действий ---
 async def log_action(user_id: int, action: str):
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -66,7 +68,7 @@ async def log_action(user_id: int, action: str):
 def get_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton("🕒 Текущее время")],
-        [KeyboardButton("📊 Моя статистика")],  # Новая кнопка
+        [KeyboardButton("📊 Моя статистика")],
         [KeyboardButton("🚪 Остановить бота")],
     ]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
@@ -90,6 +92,7 @@ async def show_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -98,9 +101,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             (user.id,)
         )
         count = cursor.fetchone()[0]
-        await update.message.reply_text(
-            f"📊 Вы использовали бота {count} раз(а)"
-        )
+        await update.message.reply_text(f"📊 Вы использовали бота {count} раз(а)")
         await log_action(user.id, "stats_request")
     except Exception as e:
         logger.error(f"Ошибка получения статистики: {e}")
@@ -118,13 +119,10 @@ async def stop_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # --- Запуск бота ---
 def main() -> None:
-    # Инициализация БД
     init_db()
     
-    # Создание приложения
     application = Application.builder().token(os.environ['TOKEN']).build()
 
-    # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex("^🕒 Текущее время$"), show_time))
     application.add_handler(MessageHandler(filters.Regex("^📊 Моя статистика$"), show_stats))

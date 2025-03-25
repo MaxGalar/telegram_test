@@ -13,7 +13,6 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# TOKEN = "8161011333:AAFpt-URWfP2YIJWHBO43_InCSOmJyxMUcU"  # Замените на реальный токен от @BotFather
 TOKEN = os.environ['TOKEN']
 
 # --- Клавиатура с кнопками ---

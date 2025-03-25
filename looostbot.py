@@ -55,17 +55,113 @@ def init_db():
         if conn:
             conn.close()
 
-# ... (остальные функции остаются без изменений, как в предыдущем коде) ...
+# --- Клавиатура ---
+def get_keyboard() -> ReplyKeyboardMarkup:
+    buttons = [
+        [KeyboardButton("🕒 Текущее время")],
+        [KeyboardButton("📊 Моя статистика")],
+        [KeyboardButton("🚪 Остановить бота")],
+    ]
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
+# --- Логирование действий ---
+async def log_action(user_id: int):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO user_actions (user_id)
+            VALUES (%s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                last_activity = NOW(),
+                actions_count = user_actions.actions_count + 1
+        """, (user_id,))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка записи в БД: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+# --- Обработчики команд ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    logger.info(f"Пользователь {user.id} запустил бота")
+    await log_action(user.id)
+    await update.message.reply_text(
+        f"Привет, {user.first_name}! Выбери действие:",
+        reply_markup=get_keyboard(),
+    )
+
+async def show_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    logger.info(f"Пользователь {user.id} запросил время")
+    await log_action(user.id)
+    current_time = datetime.datetime.now().strftime("%H:%M:%S %d.%m.%Y")
+    await update.message.reply_text(f"⏰ Текущее время: {current_time}")
+
+async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    await log_action(user.id)
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT first_activity, last_activity, actions_count
+            FROM user_actions
+            WHERE user_id = %s
+        """, (user.id,))
+        
+        result = cursor.fetchone()
+        if result:
+            first_activity, last_activity, count = result
+            first_str = first_activity.strftime("%d.%m.%Y %H:%M")
+            last_str = last_activity.strftime("%d.%m.%Y %H:%M")
+            message = (
+                f"📊 Ваша статистика:\n"
+                f"• Первый визит: {first_str}\n"
+                f"• Последний визит: {last_str}\n"
+                f"• Всего действий: {count}"
+            )
+        else:
+            message = "📊 Статистика не найдена"
+        
+        await update.message.reply_text(message)
+    except Exception as e:
+        logger.error(f"Ошибка получения статистики: {e}")
+        await update.message.reply_text("⚠️ Не удалось получить статистику")
+    finally:
+        if conn:
+            conn.close()
+
+async def stop_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    logger.info(f"Пользователь {user.id} остановил бота")
+    await log_action(user.id)
+    await update.message.reply_text("Бот завершает работу...", reply_markup=None)
+    await context.application.stop()
+
+# --- Запуск бота ---
 def main() -> None:
-    # Проверяем наличие DATABASE_URL
-    if 'DATABASE_URL' not in os.environ:
-        logger.error("Не найдена переменная DATABASE_URL!")
+    # Проверяем наличие необходимых переменных
+    required_vars = ['DATABASE_URL', 'TOKEN']
+    missing_vars = [var for var in required_vars if var not in os.environ]
+    
+    if missing_vars:
+        logger.error(f"Отсутствуют переменные окружения: {', '.join(missing_vars)}")
         return
     
+    # Инициализация БД
     init_db()
-    application = Application.builder().token(os.environ['TOKEN']).build()
     
+    # Создание приложения
+    application = Application.builder().token(os.environ['TOKEN']).build()
+
     # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex("^🕒 Текущее время$"), show_time))

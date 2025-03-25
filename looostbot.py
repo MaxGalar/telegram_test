@@ -11,9 +11,8 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-# TOKEN = "8161011333:AAFpt-URWfP2YIJWHBO43_InCSOmJyxMUcU"  # Замените на реальный токен от @BotFather
-import os
-TOKEN = os.environ['TOKEN']
+
+TOKEN = "8161011333:AAFpt-URWfP2YIJWHBO43_InCSOmJyxMUcU"  # Замените на реальный токен от @BotFather
 
 # --- Клавиатура с кнопками ---
 def get_keyboard() -> ReplyKeyboardMarkup:

@@ -79,7 +79,7 @@ def setup_daily_job(application):
 def main():
     # Создаем приложение
     application = Application.builder() \
-        .token(os.environ['TELEGRAM_BOT_TOKEN']) \
+        .token(os.environ['TOKEN']) \
         .build()
     
     # Регистрируем обработчики

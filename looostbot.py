@@ -10,7 +10,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     # Создаем приложение
-    app = Application.builder().token(os.environ['BOT_TOKEN']).build()
+    app = Application.builder().token(os.environ['TOKEN']).build()
     
     # Добавляем обработчик команды /start
     app.add_handler(CommandHandler('start', start))

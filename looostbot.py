@@ -1,173 +1,96 @@
-import datetime
 import os
 import logging
-import psycopg2
-from urllib.parse import urlparse
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from datetime import time
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters
+)
 
-# --- Настройка логгирования ---
+# Настройка логгирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler('bot.log'),
-        logging.StreamHandler()
-    ]
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Подключение к PostgreSQL ---
-def get_db_connection():
-    try:
-        db_url = os.environ['DATABASE_URL']
-        parsed = urlparse(db_url)
-        
-        conn = psycopg2.connect(
-            dbname=parsed.path[1:],
-            user=parsed.username,
-            password=parsed.password,
-            host=parsed.hostname,
-            port=parsed.port,
-            sslmode='require'
-        )
-        return conn
-    except Exception as e:
-        logger.error(f"Ошибка подключения к БД: {str(e)}")
-        raise
-
-# --- Инициализация БД ---
-def init_db():
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                # Создаем таблицу, если не существует
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS user_actions (
-                        user_id BIGINT PRIMARY KEY,
-                        first_activity TIMESTAMP DEFAULT NOW(),
-                        last_activity TIMESTAMP DEFAULT NOW(),
-                        actions_count INTEGER DEFAULT 1,
-                        username TEXT
-                    )
-                """)
-                
-                # Проверяем наличие столбца username
-                cursor.execute("""
-                    SELECT column_name 
-                    FROM information_schema.columns 
-                    WHERE table_name='user_actions' AND column_name='username'
-                """)
-                if not cursor.fetchone():
-                    cursor.execute("ALTER TABLE user_actions ADD COLUMN username TEXT")
-                
-                conn.commit()
-                logger.info("Таблица user_actions готова к работе")
-    except Exception as e:
-        logger.error(f"Ошибка инициализации БД: {str(e)}")
-        raise
-
-# --- Логирование действий ---
-async def log_action(user_id: int, username: str = None):
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    INSERT INTO user_actions (user_id, username)
-                    VALUES (%s, %s)
-                    ON CONFLICT (user_id) DO UPDATE SET
-                        last_activity = NOW(),
-                        actions_count = user_actions.actions_count + 1,
-                        username = COALESCE(%s, user_actions.username)
-                """, (user_id, username, username))
-                conn.commit()
-                logger.info(f"Действие пользователя {user_id} записано в БД")
-    except Exception as e:
-        logger.error(f"Ошибка записи в БД: {str(e)}")
-
-# --- Получение статистики ---
-async def get_user_stats(user_id: int):
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT first_activity, last_activity, actions_count
-                    FROM user_actions
-                    WHERE user_id = %s
-                """, (user_id,))
-                return cursor.fetchone()
-    except Exception as e:
-        logger.error(f"Ошибка получения статистики: {str(e)}")
-        return None
-
-# --- Клавиатура ---
-def get_keyboard():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("🕒 Текущее время")],
-        [KeyboardButton("📊 Моя статистика")],
-        [KeyboardButton("🚪 Остановить бота")]
-    ], resize_keyboard=True)
-
-# --- Обработчики команд ---
+# Обработчик команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await log_action(user.id, user.username)
     await update.message.reply_text(
-        f"Привет, {user.first_name}! Выбери действие:",
-        reply_markup=get_keyboard()
+        "Привет! Я буду ежедневно в 12:00 спрашивать, как у тебя дела.\n"
+        "Оценивай свое состояние от 1 до 5."
     )
-
-async def show_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await log_action(user.id)
-    current_time = datetime.datetime.now().strftime("%H:%M:%S %d.%m.%Y")
-    await update.message.reply_text(f"⏰ Текущее время: {current_time}")
-
-async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    stats = await get_user_stats(user.id)
     
-    if stats:
-        first, last, count = stats
-        message = (
-            f"📊 Ваша статистика:\n"
-            f"• Первый визит: {first.strftime('%d.%m.%Y %H:%M')}\n"
-            f"• Последний визит: {last.strftime('%d.%m.%Y %H:%M')}\n"
-            f"• Всего действий: {count}"
-        )
-    else:
-        message = "📊 Статистика не найдена"
+    # Добавляем пользователя в список подписчиков
+    user_id = update.effective_user.id
+    if 'subscribers' not in context.bot_data:
+        context.bot_data['subscribers'] = set()
+    context.bot_data['subscribers'].add(user_id)
     
-    await update.message.reply_text(message)
+    await send_rating_request(context)
 
-async def stop_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Бот завершает работу...")
-    await context.application.stop()
-
-# --- Запуск бота ---
-def main():
-    # Проверка переменных окружения
-    required_vars = ['DATABASE_URL', 'TOKEN']
-    missing_vars = [var for var in required_vars if var not in os.environ]
+# Отправка запроса на оценку
+async def send_rating_request(context: ContextTypes.DEFAULT_TYPE):
+    if 'subscribers' not in context.bot_data:
+        return
+        
+    keyboard = [[str(i)] for i in range(1, 6)]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
     
-    if missing_vars:
-        logger.error(f"Отсутствуют переменные окружения: {', '.join(missing_vars)}")
+    for user_id in context.bot_data['subscribers']:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="Как твое состояние сегодня? Оцени от 1 до 5:",
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.error(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
+
+# Обработка ответа пользователя
+async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rating = update.message.text
+    if rating not in ['1', '2', '3', '4', '5']:
+        await update.message.reply_text("Пожалуйста, выбери оценку от 1 до 5")
         return
     
-    # Инициализация БД
-    init_db()
+    user = update.effective_user
+    logger.info(f"Пользователь {user.id} оценил свое состояние на {rating}")
     
-    # Создание приложения
-    app = Application.builder().token(os.environ['TOKEN']).build()
+    # Здесь можно сохранить оценку в базу данных
+    await update.message.reply_text(
+        f"Спасибо за оценку! Ты поставил {rating}.\n"
+        "Завтра я спрошу снова в 12:00."
+    )
+
+# Настройка ежедневного опроса
+def setup_daily_job(application):
+    # Устанавливаем время опроса (12:00 по UTC+3)
+    time_utc = time(hour=9, minute=0)  # 12:00 MSK = 09:00 UTC
     
-    # Регистрация обработчиков
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(MessageHandler(filters.Regex('^🕒 Текущее время$'), show_time))
-    app.add_handler(MessageHandler(filters.Regex('^📊 Моя статистика$'), show_stats))
-    app.add_handler(MessageHandler(filters.Regex('^🚪 Остановить бота$'), stop_bot))
+    # Добавляем задание
+    job_queue = application.job_queue
+    job_queue.run_daily(send_rating_request, time=time_utc)
+
+# Запуск бота
+def main():
+    # Создаем приложение
+    application = Application.builder() \
+        .token(os.environ['TELEGRAM_BOT_TOKEN']) \
+        .build()
     
-    logger.info("Бот запущен и готов к работе")
-    app.run_polling()
+    # Регистрируем обработчики
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_rating))
+    
+    # Настраиваем ежедневное задание
+    setup_daily_job(application)
+    
+    # Запускаем бота
+    application.run_polling()
 
 if __name__ == '__main__':
     main()

@@ -1,1 +1,1 @@
-web: python3 looostbot.py
+worker: python looostbot.py

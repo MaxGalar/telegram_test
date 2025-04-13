@@ -68,8 +68,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             f"Привет, {first_name}!\n"
-            "Сегодня замечательный день! ☀️\n"
-            "Я записал тебя в базу данных!"
+            "↓\n"
+            "Следуй за историей. Стань её частью."
         )
 
     except asyncpg.PostgresError as e:

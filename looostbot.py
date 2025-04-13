@@ -69,7 +69,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"Привет, {first_name}!\n"
             "↓\n"
-            "Следуй за историей. Стань её частью."
+            "Следуй за историей\n"
+            "↓\n" 
+            "Стань её частью"
         )
 
     except asyncpg.PostgresError as e:
